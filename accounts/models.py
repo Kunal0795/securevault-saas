@@ -1,7 +1,7 @@
-# accounts/models.py
 import uuid
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+
 
 class CustomUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -11,6 +11,17 @@ class CustomUser(AbstractUser):
         related_name='users',
         null=True,   # temporarily nullable — see note below
         blank=True,
+    )
+
+    class RoleChoices(models.TextChoices):
+        ADMIN = 'ADMIN', 'Admin'
+        MEMBER = 'MEMBER', 'Member'
+        VIEWER = 'VIEWER', 'Viewer'
+
+    role = models.CharField(
+        max_length=10,
+        choices=RoleChoices.choices,
+        default=RoleChoices.MEMBER,
     )
 
     def __str__(self):
