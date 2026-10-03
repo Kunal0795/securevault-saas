@@ -18,3 +18,11 @@ ACCESS_B=$(curl -s -X POST http://localhost:8000/api/token/ -H "Content-Type: ap
 echo "--- GET as member_b (should see nothing from Tenant A) ---"
 curl -s http://localhost:8000/api/documents/ -H "Authorization: Bearer $ACCESS_B"
 echo
+
+ACCESS_V=$(curl -s -X POST http://localhost:8000/api/token/ -H "Content-Type: application/json" -d '{"username": "viewer_a", "password": "'"${TEST_PASSWORD:-testpass123}"'"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access'])")
+
+echo "--- POST as viewer_a (should be 403) ---"
+curl -s -w "\nHTTP_STATUS:%{http_code}\n" -X POST http://localhost:8000/api/documents/ -H "Authorization: Bearer $ACCESS_V" -H "Content-Type: application/json" -d '{"title": "Viewer Attempt", "content": "x"}'
+
+echo "--- GET as viewer_a (should now be 200) ---"
+curl -s -w "\nHTTP_STATUS:%{http_code}\n" http://localhost:8000/api/documents/ -H "Authorization: Bearer $ACCESS_V"
