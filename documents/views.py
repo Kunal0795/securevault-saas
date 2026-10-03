@@ -1,34 +1,25 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+
 from .models import Document
+from .permissions import DocumentAccessPolicy, RolePermission, visible_documents
 from .serializers import DocumentSerializer
-from .permissions import RolePermission
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
     serializer_class = DocumentSerializer
-    permission_classes = [permissions.IsAuthenticated, RolePermission]  # RolePermission/DocumentAccessPolicy plug in here in Steps 4-5
-    # ... get_queryset and perform_create stay exactly as they are
+    permission_classes = [IsAuthenticated, RolePermission, DocumentAccessPolicy]
 
     def get_queryset(self):
-        # Defense-in-depth: PostgreSQL RLS already restricts visible rows via the
-        # app.current_tenant_id session var (set in TenantMiddleware). This explicit
-        # filter is a SECOND, independent layer — if RLS were ever misconfigured or
-        # the session var failed to set, this still blocks cross-tenant reads.
-        return Document.objects.filter(tenant=self.request.user.tenant)
+        user = self.request.user
+        # Layer: app-level tenant filter (Postgres RLS is the layer beneath it),
+        # then ABAC read-visibility on top.
+        qs = Document.objects.filter(tenant=user.tenant)
+        return visible_documents(user, qs)
 
     def perform_create(self, serializer):
-        # tenant and created_by are never trusted from client input — always derived
-        # from the authenticated request. Pairs with read_only_fields in the serializer.
-        serializer.save(tenant=self.request.user.tenant, created_by=self.request.user)
-
-
-
-
-
-
-
-
-
-
-
-
+        # tenant / created_by come from the authenticated user, never the client
+        serializer.save(
+            tenant=self.request.user.tenant,
+            created_by=self.request.user,
+        )
