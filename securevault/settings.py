@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
+    'audit',
 ]
 
 MIDDLEWARE = [
@@ -162,3 +163,24 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
 }
+# --- Celery (audit pipeline) ---
+CELERY_BROKER_URL = os.environ['CELERY_BROKER_URL']   # KeyError if missing: fail closed
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TASK_IGNORE_RESULT = True                      # fire-and-forget, no result backend
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TASK_ROUTES = {'audit.*': {'queue': 'audit'}}
+
+# --- Celery (audit pipeline) ---
+CELERY_BROKER_URL = os.environ['CELERY_BROKER_URL']   # KeyError if missing: fail closed
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TASK_IGNORE_RESULT = True                      # fire-and-forget, no result backend
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TASK_ROUTES = {'audit.*': {'queue': 'audit'}}
