@@ -1,3 +1,4 @@
+from audit.mixins import AuditedViewSetMixin
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
@@ -6,7 +7,7 @@ from .permissions import DocumentAccessPolicy, RolePermission, visible_documents
 from .serializers import DocumentSerializer
 
 
-class DocumentViewSet(viewsets.ModelViewSet):
+class DocumentViewSet(AuditedViewSetMixin, viewsets.ModelViewSet):
     serializer_class = DocumentSerializer
     permission_classes = [IsAuthenticated, RolePermission, DocumentAccessPolicy]
 
