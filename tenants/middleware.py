@@ -1,5 +1,4 @@
-# tenants/middleware.py
-from django.db import connection
+from django.db import connection, transaction
 from django.http import JsonResponse
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
@@ -41,7 +40,18 @@ class TenantMiddleware:
         if not Tenant.objects.filter(id=tenant_id, is_active=True).exists():
             return JsonResponse({'error': 'Invalid or inactive tenant'}, status=403)
 
-        with connection.cursor() as cursor:
-            cursor.execute("SET app.current_tenant_id = %s", [tenant_id])
-
-        return self.get_response(request)
+        # Tenant context is transaction-scoped: set_config(..., true) is SET LOCAL, so
+        # Postgres discards it at COMMIT/ROLLBACK and it cannot outlive the request on a
+        # reused or pooled connection. It is also cleared explicitly, because a
+        # savepoint inherits an outer transaction's SET LOCAL (tests, or any caller
+        # that already holds a transaction open).
+        try:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT set_config('app.current_tenant_id', %s, true)", [tenant_id]
+                    )
+                return self.get_response(request)
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('app.current_tenant_id', '', true)")
