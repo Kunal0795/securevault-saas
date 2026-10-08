@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (PostgreSQL 16, RLS enforced)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres   # superuser: used only to create the limited app role below
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DEBUG: "False"
+      DB_NAME: securevault_db
+      DB_USER: securevault_user
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: redis://:unused@127.0.0.1:6379/0   # tests never publish to a real broker
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate throwaway secrets for this run
+        run: |
+          secret_key=$(openssl rand -base64 48 | tr -d '\n')
+          db_password=$(openssl rand -hex 16)
+          echo "::add-mask::$secret_key"
+          echo "::add-mask::$db_password"
+          echo "SECRET_KEY=$secret_key" >> "$GITHUB_ENV"
+          echo "DB_PASSWORD=$db_password" >> "$GITHUB_ENV"
+
+      - name: Create the application role (not a superuser, so RLS applies to it)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE ${DB_USER} LOGIN PASSWORD '${DB_PASSWORD}' CREATEDB NOSUPERUSER NOBYPASSRLS" \
+            -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER}"
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Migrations are up to date
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Test suite
+        run: python manage.py test --noinput -v 2
+
+  security-scan:
+    name: Dependency and code scan (informational)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true   # report only for now; made blocking once the findings are triaged
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: pip install pip-audit bandit
+
+      - name: Known-vulnerable dependencies
+        run: pip-audit -r requirements.txt
+
+      - name: Static analysis
+        run: bandit -r accounts audit documents tenants securevault -ll
