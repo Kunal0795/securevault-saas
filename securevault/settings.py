@@ -23,13 +23,13 @@ load_dotenv(BASE_DIR / '.env')
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = os.environ['SECRET_KEY']   # KeyError if missing: fail closed
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'   # off unless explicitly enabled
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
 
 
 # Application definition
@@ -151,6 +151,10 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    # fail closed: a view added later without explicit permissions still requires a login
+    'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',),
+    # API only: no browsable-API HTML pages
+    'DEFAULT_RENDERER_CLASSES': ('rest_framework.renderers.JSONRenderer',),
 }
 
 # settings.py — token lifetimes + rotation + blacklist
@@ -174,13 +178,32 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_TASK_ROUTES = {'audit.*': {'queue': 'audit'}}
 
-# --- Celery (audit pipeline) ---
-CELERY_BROKER_URL = os.environ['CELERY_BROKER_URL']   # KeyError if missing: fail closed
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_TASK_IGNORE_RESULT = True                      # fire-and-forget, no result backend
-CELERY_TASK_ACKS_LATE = True
-CELERY_TASK_REJECT_ON_WORKER_LOST = True
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_TASK_ROUTES = {'audit.*': {'queue': 'audit'}}
+# --- Transport security: set HTTPS_ONLY=true when serving behind TLS ---
+if os.environ.get('HTTPS_ONLY', 'False').lower() == 'true':
+    SECURE_SSL_REDIRECT = True
+    # only correct behind a proxy that overwrites X-Forwarded-Proto itself
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+# --- Email: console in dev, SMTP otherwise ---
+if DEBUG:
+    MAILERS = {
+        'default': {'BACKEND': 'django.core.mail.backends.console.EmailBackend'},
+    }
+else:
+    MAILERS = {
+        'default': {
+            'BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
+            'OPTIONS': {
+                'host': os.environ['EMAIL_HOST'],   # KeyError if missing: fail closed
+                'port': int(os.environ.get('EMAIL_PORT', '587')),
+                'username': os.environ.get('EMAIL_HOST_USER', ''),
+                'password': os.environ.get('EMAIL_HOST_PASSWORD', ''),
+                'use_tls': True,
+            },
+        },
+    }
