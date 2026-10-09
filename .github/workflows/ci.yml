@@ -33,6 +33,7 @@ jobs:
 
     env:
       DEBUG: "False"
+      EMAIL_HOST: localhost
       DB_NAME: securevault_db
       DB_USER: securevault_user
       DB_HOST: 127.0.0.1
