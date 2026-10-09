@@ -2,6 +2,50 @@
 
 Multi-tenant Django/PostgreSQL backend demonstrating defense-in-depth security: Row-Level Security tenant isolation, JWT auth with refresh rotation, and layered RBAC/ABAC access control.
 
+## Quick start (Docker)
+
+Requires Docker with the Compose plugin.
+
+```bash
+./docker/gen-env.sh      # per-service secrets -> .env.docker.* (git-ignored, mode 600)
+docker compose build
+docker compose up -d
+docker compose ps        # db, redis, web healthy; migrate exited 0; worker up
+```
+
+| Service | What it runs | Exposure |
+|---|---|---|
+| `web` | gunicorn serving the Django/DRF API | `127.0.0.1:8000` only |
+| `worker` | Celery worker on the `audit` queue (hash-chained audit events) | none |
+| `db` | PostgreSQL 16; the app connects as a non-superuser role without `BYPASSRLS`, so RLS applies | none |
+| `redis` | Celery broker: password-protected, AOF persistence | none |
+| `migrate` | one-shot `manage.py migrate` that web and worker wait for | none |
+
+The app containers run as a non-root user (uid 10001) with a read-only root filesystem, all Linux capabilities dropped and `no-new-privileges`. The database, Redis, worker and migration job sit on an internal network with no internet access and publish no host ports.
+
+Smoke checks:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/documents/   # 401 without a token
+docker compose exec -T worker celery -A securevault inspect ping                 # pong
+```
+
+Stop with `docker compose down` (keeps data; `down -v` also deletes the database).
+
+## Configuration
+
+Copy `.env.example` to `.env` for local development. The compose stack gets its values from the generated `.env.docker.*` files.
+
+| Variable | Required | Notes |
+|---|---|---|
+| `SECRET_KEY` | yes | the app refuses to start without it |
+| `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` | yes | `DB_USER` must not be a superuser or have `BYPASSRLS`, otherwise RLS is silently skipped |
+| `CELERY_BROKER_URL` | yes | `redis://:<password>@host:6379/0`; the app refuses to start without it |
+| `DEBUG` | no | defaults to `False` |
+| `ALLOWED_HOSTS` | when `DEBUG` is off | comma-separated host names |
+| `HTTPS_ONLY` | no | `true` behind a TLS-terminating proxy: SSL redirect, HSTS, secure cookies |
+| `EMAIL_HOST` (+ `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`) | when `DEBUG` is off | SMTP settings; with `DEBUG` on, emails go to the console |
+
 ## Access Control (RBAC + ABAC)
 
 | Role   | Read PUBLIC/INTERNAL | Read CONFIDENTIAL | Create | Update/Delete |
@@ -79,3 +123,32 @@ celery -A securevault worker -Q audit -l info
 - **Requests rejected by the tenant middleware** before reaching a view (for example a missing token) are not yet audited.
 - **The token-endpoint throttle (30/min per IP)** bounds log growth from anonymous callers; it is not brute-force protection, which would need per-account lockout.
 - **`sequence` is write order**, which can differ slightly from `occurred_at` under concurrency.
+
+## Security posture and how it is verified
+
+No single layer is trusted on its own: JWT authentication, tenant binding in middleware, application-level filtering, RBAC and ABAC, PostgreSQL row-level security, and an append-only hash-chained audit log each enforce isolation independently. The adversarial suite attacks them directly.
+
+| Area | Module (`adversarial/`) | Tests |
+|---|---|---|
+| Harness and RLS smoke test | `test_harness` | 7 |
+| Tenant context leaking across requests | `test_tenant_context_leak` | 3 |
+| JWT tampering (alg none, wrong key, forged claims, token-type confusion, refresh replay) | `test_jwt_tampering` | 14 |
+| Hostile token structure must give 401, not 500 | `test_jwt_parser_robustness` | 2 |
+| IDOR, role matrix, mass assignment, cross-tenant writes | `test_access_control` | 15 |
+| Audit coverage of allowed, denied and cross-tenant requests | `test_audit_coverage` | 7 |
+| SQL injection (params, path ids, login, RLS context hijack) | `test_sql_injection` | 10 |
+| RLS enforced at the database layer alone | `test_database_layer` | 3 |
+| **Total** | | **61** |
+
+Run the suite with `python manage.py test --noinput`. The database role needs `CREATEDB` to build the test database, so the compose role cannot run it; CI does. The role-matrix script `verify_matrix.sh` (43 checks, needs `SV_TEST_PASSWORD`) exercises all seeded users against the live API.
+
+CI (GitHub Actions) runs the suite on PostgreSQL 16 with a non-superuser role, so RLS genuinely applies, plus informational `pip-audit` and `bandit` scans. `pip-audit` once flagged 14 advisories in PyJWT 2.13.0; it was upgraded to 2.15.1 and regression tests for hostile token structure were added. `manage.py check --deploy --fail-level WARNING` passes with `HTTPS_ONLY=true`.
+
+## Deployment notes and limitations
+
+- **TLS:** the compose stack speaks plain HTTP on loopback (`HTTPS_ONLY=False`). For a real deployment, terminate TLS in a proxy that overwrites `X-Forwarded-Proto`, then set `HTTPS_ONLY=true`.
+- **Secrets:** generated locally into git-ignored files; a real deployment needs a secrets manager.
+- **Redis password:** passed to `redis-server` as an argument, so it is visible in that container's process list; a mounted config file would avoid that.
+- **Seed users:** `seed_rbac_users` creates development users with a hardcoded password; it is for local development only.
+- **CI:** does not build the Docker image yet.
+- **Signup:** there is no signup flow yet, so `CustomUser.tenant` is still nullable.
