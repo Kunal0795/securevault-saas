@@ -1,0 +1,96 @@
+name: securevault
+
+# Shared by every service that runs our image
+x-hardened: &hardened
+  image: securevault:local
+  env_file: .env.docker.app
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - backend
+
+services:
+  db:
+    image: postgres:16
+    env_file: .env.docker.db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 forces TCP. The temporary init-time server listens only on a socket,
+      # so this stays unhealthy until the init script has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - backend
+
+  redis:
+    image: redis:7
+    env_file: .env.docker.redis
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - backend
+
+  migrate:
+    <<: *hardened
+    pull_policy: never
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    <<: *hardened
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - backend
+      - frontend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  worker:
+    <<: *hardened
+    pull_policy: never
+    command: ["celery", "-A", "securevault", "worker", "-Q", "audit", "-l", "INFO", "--concurrency", "2"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+
+volumes:
+  pgdata:
+  redisdata:
