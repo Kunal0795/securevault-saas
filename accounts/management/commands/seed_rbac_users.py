@@ -1,4 +1,6 @@
-from django.core.management.base import BaseCommand
+import os
+
+from django.core.management.base import BaseCommand, CommandError
 from accounts.models import CustomUser
 from tenants.models import Tenant
 
@@ -7,6 +9,12 @@ class Command(BaseCommand):
     help = "Seed non-superuser test users with roles across tenants A and B"
 
     def handle(self, *args, **options):
+        password = os.environ.get("SV_TEST_PASSWORD")
+        if not password:
+            raise CommandError(
+                "SV_TEST_PASSWORD is not set: export a local-only test password first."
+            )
+
         tenant_a = Tenant.objects.get(id="5afd53de-3ba4-4506-ba69-d71b43cbc38e")
         tenant_b = Tenant.objects.get(id="3ca0886e-105b-48c7-8f3f-9a41336bfd4b")
 
@@ -25,7 +33,7 @@ class Command(BaseCommand):
                 defaults={"tenant": tenant, "role": role},
             )
             if created:
-                user.set_password("testpass123")
+                user.set_password(password)
                 user.save()
                 self.stdout.write(self.style.SUCCESS(f"Created {username} ({role}, {tenant.name})"))
             else:

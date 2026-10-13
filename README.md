@@ -149,6 +149,6 @@ CI (GitHub Actions) runs the suite on PostgreSQL 16 with a non-superuser role, s
 - **TLS:** the compose stack speaks plain HTTP on loopback (`HTTPS_ONLY=False`). For a real deployment, terminate TLS in a proxy that overwrites `X-Forwarded-Proto`, then set `HTTPS_ONLY=true`.
 - **Secrets:** generated locally into git-ignored files; a real deployment needs a secrets manager.
 - **Redis password:** passed to `redis-server` as an argument, so it is visible in that container's process list; a mounted config file would avoid that.
-- **Seed users:** `seed_rbac_users` creates development users with a hardcoded password; it is for local development only.
+- **Seed users:** `seed_rbac_users`, `verify_matrix.sh` and `test_api.sh` read the shared local test password from `SV_TEST_PASSWORD`; the seed command refuses to run without it.
 - **CI:** does not build the Docker image yet.
 - **Signup:** there is no signup flow yet, so `CustomUser.tenant` is still nullable.
